@@ -14,9 +14,9 @@ MSK = timezone(timedelta(hours=3))
 SOURCE_AVITO = "AVITO"
 SOURCE_GARAGE = "UC_98W3GU"
 
-# Поля встреч — найдём из сделки
-MEETING_PLANNED_FIELD = None
-MEETING_FACT_FIELD = None
+# Поля встреч — определим вручную после дебага
+MEETING_PLANNED_FIELD = "UF_CRM_1741693538"   # Дата встречи назначена (предположение)
+MEETING_FACT_FIELD = "UF_CRM_1741693600"       # Дата встречи фактическая (предположение)
 
 
 async def bx(session, method, params=None):
@@ -45,41 +45,14 @@ async def tg_send(session, text):
         logging.error(f"TG error: {e}")
 
 
-async def find_meeting_fields(session):
-    global MEETING_PLANNED_FIELD, MEETING_FACT_FIELD
-
-    # Берём сделку с заполненной датой встречи — "08.04 сплит авито"
-    deals = await bx(session, "crm.deal.list", {
-        "filter[TITLE]": "08.04 сплит авито",
-        "select[]": ["ID"],
-    })
-
-    if isinstance(deals, list) and deals:
-        deal_id = deals[0].get("ID")
-        deal = await bx(session, "crm.deal.get", {"id": deal_id})
-        if isinstance(deal, dict):
-            logging.info(f"Поля сделки {deal_id}:")
-            for k, v in deal.items():
-                if k.startswith("UF_") and v:
-                    logging.info(f"  {k} = {v}")
-
-    # Также пробуем получить метки через fields
-    fields_info = await bx(session, "crm.deal.fields", {})
-    if isinstance(fields_info, dict):
-        for fname, fdata in fields_info.items():
-            if fname.startswith("UF_"):
-                title = fdata.get("title", "")
-                if title:
-                    logging.info(f"Поле с title: {fname} → {title}")
-                    tl = title.lower()
-                    if "назнач" in tl and "встреч" in tl:
-                        MEETING_PLANNED_FIELD = fname
-                        logging.info(f"✅ Найдено поле назначена: {fname}")
-                    if ("факт" in tl or "фактич" in tl) and "встреч" in tl:
-                        MEETING_FACT_FIELD = fname
-                        logging.info(f"✅ Найдено поле фактическая: {fname}")
-
-    logging.info(f"Итог: назначена={MEETING_PLANNED_FIELD}, фактическая={MEETING_FACT_FIELD}")
+async def debug_deal(session):
+    """Смотрим все UF поля сделки с заполненной датой встречи"""
+    deal = await bx(session, "crm.deal.get", {"id": 53590})
+    if isinstance(deal, dict):
+        logging.info("=== Все UF поля сделки 53590 ===")
+        for k, v in deal.items():
+            if k.startswith("UF_"):
+                logging.info(f"  {k} = {repr(v)}")
 
 
 async def collect_stats(session):
@@ -104,7 +77,7 @@ async def collect_stats(session):
     })
     garage_count = len(garage_deals) if isinstance(garage_deals, list) else 0
 
-    # Встречи
+    # Встречи назначены
     planned_count = 0
     completed_count = 0
 
@@ -112,17 +85,21 @@ async def collect_stats(session):
         planned = await bx(session, "crm.deal.list", {
             f"filter[>={MEETING_PLANNED_FIELD}]": today_str,
             f"filter[<{MEETING_PLANNED_FIELD}]": today_end,
-            "select[]": ["ID"],
+            "select[]": ["ID", MEETING_PLANNED_FIELD],
         })
         planned_count = len(planned) if isinstance(planned, list) else 0
+        logging.info(f"Встречи назначены (поле {MEETING_PLANNED_FIELD}): {planned_count}")
+        if isinstance(planned, list) and planned:
+            logging.info(f"  Пример: {planned[0]}")
 
     if MEETING_FACT_FIELD:
         completed = await bx(session, "crm.deal.list", {
             f"filter[>={MEETING_FACT_FIELD}]": today_str,
             f"filter[<{MEETING_FACT_FIELD}]": today_end,
-            "select[]": ["ID"],
+            "select[]": ["ID", MEETING_FACT_FIELD],
         })
         completed_count = len(completed) if isinstance(completed, list) else 0
+        logging.info(f"Встречи фактические (поле {MEETING_FACT_FIELD}): {completed_count}")
 
     logging.info(f"Авито={avito_count} Гараж={garage_count} Встречи={planned_count} Состоялось={completed_count}")
 
@@ -153,13 +130,12 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v6")
+    logging.info("Бот запущен v7")
     async with aiohttp.ClientSession() as session:
-        await find_meeting_fields(session)
+        await debug_deal(session)
         await send_report(session)
         while True:
             await asyncio.sleep(3600)
-            await find_meeting_fields(session)
             await send_report(session)
 
 
