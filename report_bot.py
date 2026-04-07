@@ -1,4 +1,4 @@
-=import asyncio
+import asyncio
 import aiohttp
 import logging
 from datetime import datetime, timezone, timedelta
@@ -11,9 +11,8 @@ BITRIX_WEBHOOK = "https://momentum-techit.bitrix24.ru/rest/2790/56agqwjf3rysukb8
 
 MSK = timezone(timedelta(hours=3))
 
+SOURCE_AVITO = "AVITO"
 SOURCE_GARAGE = "UC_98W3GU"
-AVITO_SOURCES = ["AVITO", "AVITO_COMAGIC"]
-
 MEETING_PLANNED_FIELD = "UF_CRM_1756299008904"
 MEETING_FACT_FIELD = "UF_CRM_1756299040214"
 
@@ -46,26 +45,27 @@ async def tg_send(session, text):
 
 async def collect_stats(session):
     now = datetime.now(MSK)
-    today_msk = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_utc = today_msk
-    today_str = today_msk.strftime("%Y-%m-%dT%H:%M:%S+03:00")
-    today_end = (today_msk + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S+03:00")
+    # Начало сегодняшнего дня в МСК
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+    today_str = today_start.strftime("%Y-%m-%dT%H:%M:%S+03:00")
+    today_end_str = today_end.strftime("%Y-%m-%dT%H:%M:%S+03:00")
 
-    # Контакты с Авито — считаем все Авито источники
-    avito_count = 0
-    for src in AVITO_SOURCES:
-        deals = await bx(session, "crm.deal.list", {
-            "filter[>=DATE_CREATE]": today_str,
-            "filter[SOURCE_ID]": src,
-            "select[]": ["ID"],
-        })
-        cnt = len(deals) if isinstance(deals, list) else 0
-        logging.info(f"Авито источник {src}: {cnt}")
-        avito_count += cnt
+    logging.info(f"Фильтр: {today_str} — {today_end_str}")
+
+    # Контакты с Авито
+    avito_deals = await bx(session, "crm.deal.list", {
+        "filter[>=DATE_CREATE]": today_str,
+        "filter[<DATE_CREATE]": today_end_str,
+        "filter[SOURCE_ID]": SOURCE_AVITO,
+        "select[]": ["ID"],
+    })
+    avito_count = len(avito_deals) if isinstance(avito_deals, list) else 0
 
     # Лиды с гаража
     garage_deals = await bx(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": today_str,
+        "filter[<DATE_CREATE]": today_end_str,
         "filter[SOURCE_ID]": SOURCE_GARAGE,
         "select[]": ["ID"],
     })
@@ -74,19 +74,18 @@ async def collect_stats(session):
     # Встречи назначены сегодня
     planned = await bx(session, "crm.deal.list", {
         f"filter[>={MEETING_PLANNED_FIELD}]": today_str,
-        f"filter[<{MEETING_PLANNED_FIELD}]": today_end,
-        "select[]": ["ID", MEETING_PLANNED_FIELD],
+        f"filter[<{MEETING_PLANNED_FIELD}]": today_end_str,
+        "select[]": ["ID"],
     })
     planned_count = len(planned) if isinstance(planned, list) else 0
 
-    # Состоялось встреч — дебаг
+    # Состоялось встреч сегодня
     completed = await bx(session, "crm.deal.list", {
         f"filter[>={MEETING_FACT_FIELD}]": today_str,
-        f"filter[<{MEETING_FACT_FIELD}]": today_end,
-        "select[]": ["ID", MEETING_FACT_FIELD],
+        f"filter[<{MEETING_FACT_FIELD}]": today_end_str,
+        "select[]": ["ID"],
     })
     completed_count = len(completed) if isinstance(completed, list) else 0
-    logging.info(f"Фактические встречи примеры: {completed[:3] if isinstance(completed, list) else []}")
 
     logging.info(f"Авито={avito_count} Гараж={garage_count} Встречи={planned_count} Состоялось={completed_count}")
 
