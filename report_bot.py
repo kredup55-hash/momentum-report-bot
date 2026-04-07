@@ -11,15 +11,8 @@ BITRIX_WEBHOOK = "https://momentum-techit.bitrix24.ru/rest/2790/56agqwjf3rysukb8
 
 MSK = timezone(timedelta(hours=3))
 
-# Источники
-SOURCE_AVITO = "AVITO_COMAGIC"
+SOURCE_AVITO = "AVITO"
 SOURCE_GARAGE = "UC_98W3GU"
-
-# Стадии воронки "Аренда" (id=18)
-# Пригласили в офис — нужно уточнить STAGE_ID
-# Пришел в офис — нужно уточнить STAGE_ID
-STAGE_INVITED = "C18:UC_EVNSVS"   # Пригласили в офис
-STAGE_CAME    = "C18:UC_L3PZAL"   # Пришел в офис
 
 
 async def bx(session, method, params=None):
@@ -48,10 +41,24 @@ async def tg_send(session, text):
         logging.error(f"TG error: {e}")
 
 
+async def find_meeting_fields(session):
+    """Ищем пользовательские поля для дат встреч"""
+    fields = await bx(session, "crm.deal.userfield.list", {})
+    if isinstance(fields, list):
+        for f in fields:
+            name = f.get("FIELD_NAME", "")
+            label = f.get("EDIT_FORM_LABEL", {})
+            if isinstance(label, dict):
+                label = label.get("ru", "")
+            logging.info(f"Поле: {name} → {label}")
+    return fields
+
+
 async def collect_stats(session):
     now = datetime.now(MSK)
     today_utc = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=3)
     today_str = today_utc.strftime("%Y-%m-%dT%H:%M:%S")
+    today_end = (today_utc + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
 
     # Контакты с Авито
     avito_deals = await bx(session, "crm.deal.list", {
@@ -69,27 +76,45 @@ async def collect_stats(session):
     })
     garage_count = len(garage_deals) if isinstance(garage_deals, list) else 0
 
-    # Встречи назначены — сделки перешли в стадию "Пригласили в офис" сегодня
-    invited = await bx(session, "crm.deal.list", {
-        "filter[>=DATE_MODIFY]": today_str,
-        "filter[STAGE_ID]": STAGE_INVITED,
-        "select[]": ["ID", "TITLE", "STAGE_ID"],
-    })
-    planned_count = len(invited) if isinstance(invited, list) else 0
+    # Находим поля встреч
+    fields = await bx(session, "crm.deal.userfield.list", {})
+    meeting_date_field = None
+    meeting_fact_field = None
 
-    # Состоялось встреч — сделки в стадии "Пришел в офис" изменены сегодня
-    came = await bx(session, "crm.deal.list", {
-        "filter[>=DATE_MODIFY]": today_str,
-        "filter[STAGE_ID]": STAGE_CAME,
-        "select[]": ["ID", "TITLE", "STAGE_ID"],
-    })
-    completed_count = len(came) if isinstance(came, list) else 0
+    if isinstance(fields, list):
+        for f in fields:
+            name = f.get("FIELD_NAME", "")
+            label = f.get("EDIT_FORM_LABEL", {})
+            if isinstance(label, dict):
+                label = label.get("ru", "")
+            label_lower = str(label).lower()
+            logging.info(f"Поле: {name} → {label}")
+            if "назнач" in label_lower and "встреч" in label_lower:
+                meeting_date_field = name
+            if ("факт" in label_lower or "фактич" in label_lower) and "встреч" in label_lower:
+                meeting_fact_field = name
 
-    # Дебаг стадий воронки Аренда
-    stages_arenда = await bx(session, "crm.dealcategory.stages", {"id": 18})
-    if isinstance(stages_arenда, list):
-        for s in stages_arenда:
-            logging.info(f"Стадия Аренда: {s.get('STATUS_ID')} → {s.get('NAME')}")
+    logging.info(f"Поле назначена: {meeting_date_field}, Поле фактическая: {meeting_fact_field}")
+
+    # Встречи назначены сегодня
+    planned_count = 0
+    if meeting_date_field:
+        planned = await bx(session, "crm.deal.list", {
+            f"filter[>={meeting_date_field}]": today_str,
+            f"filter[<{meeting_date_field}]": today_end,
+            "select[]": ["ID", meeting_date_field],
+        })
+        planned_count = len(planned) if isinstance(planned, list) else 0
+
+    # Состоялось встреч сегодня
+    completed_count = 0
+    if meeting_fact_field:
+        completed = await bx(session, "crm.deal.list", {
+            f"filter[>={meeting_fact_field}]": today_str,
+            f"filter[<{meeting_fact_field}]": today_end,
+            "select[]": ["ID", meeting_fact_field],
+        })
+        completed_count = len(completed) if isinstance(completed, list) else 0
 
     logging.info(f"Авито={avito_count} Гараж={garage_count} Встречи={planned_count} Состоялось={completed_count}")
 
@@ -120,7 +145,7 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v4")
+    logging.info("Бот запущен v5")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
