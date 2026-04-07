@@ -45,18 +45,23 @@ async def tg_send(session, text):
 
 async def collect_stats(session):
     now = datetime.now(MSK)
-    # Начало сегодняшнего дня в МСК
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
-    today_str = today_start.strftime("%Y-%m-%dT%H:%M:%S+03:00")
-    today_end_str = today_end.strftime("%Y-%m-%dT%H:%M:%S+03:00")
 
-    logging.info(f"Фильтр: {today_str} — {today_end_str}")
+    # DATE_CREATE хранится в UTC — фильтруем от UTC 21:00 вчера (= МСК 00:00 сегодня)
+    today_msk = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_utc_str = (today_msk - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S")
+    today_utc_end_str = (today_msk - timedelta(hours=3) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    # Поля встреч хранятся с +03:00
+    today_msk_str = today_msk.strftime("%Y-%m-%dT%H:%M:%S+03:00")
+    today_msk_end_str = (today_msk + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S+03:00")
+
+    logging.info(f"DATE_CREATE фильтр (UTC): {today_utc_str}")
+    logging.info(f"Встречи фильтр (МСК): {today_msk_str}")
 
     # Контакты с Авито
     avito_deals = await bx(session, "crm.deal.list", {
-        "filter[>=DATE_CREATE]": today_str,
-        "filter[<DATE_CREATE]": today_end_str,
+        "filter[>=DATE_CREATE]": today_utc_str,
+        "filter[<DATE_CREATE]": today_utc_end_str,
         "filter[SOURCE_ID]": SOURCE_AVITO,
         "select[]": ["ID"],
     })
@@ -64,8 +69,8 @@ async def collect_stats(session):
 
     # Лиды с гаража
     garage_deals = await bx(session, "crm.deal.list", {
-        "filter[>=DATE_CREATE]": today_str,
-        "filter[<DATE_CREATE]": today_end_str,
+        "filter[>=DATE_CREATE]": today_utc_str,
+        "filter[<DATE_CREATE]": today_utc_end_str,
         "filter[SOURCE_ID]": SOURCE_GARAGE,
         "select[]": ["ID"],
     })
@@ -73,16 +78,16 @@ async def collect_stats(session):
 
     # Встречи назначены сегодня
     planned = await bx(session, "crm.deal.list", {
-        f"filter[>={MEETING_PLANNED_FIELD}]": today_str,
-        f"filter[<{MEETING_PLANNED_FIELD}]": today_end_str,
+        f"filter[>={MEETING_PLANNED_FIELD}]": today_msk_str,
+        f"filter[<{MEETING_PLANNED_FIELD}]": today_msk_end_str,
         "select[]": ["ID"],
     })
     planned_count = len(planned) if isinstance(planned, list) else 0
 
     # Состоялось встреч сегодня
     completed = await bx(session, "crm.deal.list", {
-        f"filter[>={MEETING_FACT_FIELD}]": today_str,
-        f"filter[<{MEETING_FACT_FIELD}]": today_end_str,
+        f"filter[>={MEETING_FACT_FIELD}]": today_msk_str,
+        f"filter[<{MEETING_FACT_FIELD}]": today_msk_end_str,
         "select[]": ["ID"],
     })
     completed_count = len(completed) if isinstance(completed, list) else 0
@@ -116,7 +121,7 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v9")
+    logging.info("Бот запущен v10")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
