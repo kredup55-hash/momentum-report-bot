@@ -15,8 +15,8 @@ SOURCE_AVITO = "AVITO"
 SOURCE_GARAGE = "UC_98W3GU"
 
 # Поля встреч — определим вручную после дебага
-MEETING_PLANNED_FIELD = "UF_CRM_1741693538"   # Дата встречи назначена (предположение)
-MEETING_FACT_FIELD = "UF_CRM_1741693600"       # Дата встречи фактическая (предположение)
+MEETING_PLANNED_FIELD = "UF_CRM_1756299008904"   # Дата встречи назначена (предположение)
+MEETING_FACT_FIELD = "UF_CRM_1756299040214"       # Дата встречи фактическая (предположение)
 
 
 async def bx(session, method, params=None):
@@ -130,7 +130,7 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v7")
+    logging.info("Бот запущен v8")
     async with aiohttp.ClientSession() as session:
         await debug_deal(session)
         await send_report(session)
