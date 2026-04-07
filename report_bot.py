@@ -11,10 +11,6 @@ BITRIX_WEBHOOK = "https://momentum-techit.bitrix24.ru/rest/2790/56agqwjf3rysukb8
 
 MSK = timezone(timedelta(hours=3))
 
-# Источники
-SOURCE_AVITO = "AVITO"         # Контакты с Авито
-SOURCE_GARAGE = "UC_GARAGE"    # Яндекс Гараж — уточним ID после первого запуска
-
 
 async def bx(session, method, params=None):
     url = f"{BITRIX_WEBHOOK}{method}.json"
@@ -42,63 +38,51 @@ async def tg_send(session, text):
         logging.error(f"TG error: {e}")
 
 
-async def get_sources(session):
-    """Получаем все источники для дебага"""
-    sources = await bx(session, "crm.status.list", {"filter[ENTITY_ID]": "SOURCE"})
-    logging.info(f"Источники: {sources}")
-    return sources
-
-
 async def collect_stats(session):
     now = datetime.now(MSK)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_str = today_start.strftime("%Y-%m-%dT%H:%M:%S+03:00")
+    today_str = today_start.strftime("%Y-%m-%dT%H:%M:%S")
 
-    # 1. Контакты с Авито (сделки с источником Авито за сегодня)
-    avito_deals = await bx(session, "crm.deal.list", {
+    # Все сделки за сегодня
+    all_deals = await bx(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": today_str,
-        "filter[SOURCE_ID]": "AVITO",
-        "select[]": ["ID", "SOURCE_ID", "DATE_CREATE"],
+        "select[]": ["ID", "SOURCE_ID", "TITLE", "STAGE_ID"],
     })
-    avito_count = len(avito_deals) if isinstance(avito_deals, list) else 0
 
-    # Попробуем также лиды с Авито
-    avito_leads = await bx(session, "crm.lead.list", {
-        "filter[>=DATE_CREATE]": today_str,
-        "filter[SOURCE_ID]": "AVITO",
-        "select[]": ["ID", "SOURCE_ID"],
+    avito_count = 0
+    garage_count = 0
+
+    if isinstance(all_deals, list):
+        for d in all_deals:
+            src = str(d.get("SOURCE_ID", ""))
+            title = str(d.get("TITLE", "")).lower()
+            logging.info(f"Сделка: {d.get('TITLE')} | SOURCE_ID={src}")
+            if src in ("AVITO", "avito") or "avito" in title:
+                avito_count += 1
+            if "GARAGE" in src.upper() or "гараж" in title:
+                garage_count += 1
+
+    # Встречи назначены сегодня — стадия "Пригласили в офис" изменена сегодня
+    invited_deals = await bx(session, "crm.deal.list", {
+        "filter[>=DATE_MODIFY]": today_str,
+        "filter[STAGE_ID]": "C5:UC_EVNSVS",
+        "select[]": ["ID", "TITLE", "STAGE_ID", "DATE_MODIFY"],
     })
-    avito_count += len(avito_leads) if isinstance(avito_leads, list) else 0
+    planned_count = len(invited_deals) if isinstance(invited_deals, list) else 0
+    logging.info(f"Пригласили в офис: {planned_count}")
 
-    # 2. Лиды с Гаража (сделки и лиды с источником Яндекс Гараж)
-    garage_deals = await bx(session, "crm.deal.list", {
-        "filter[>=DATE_CREATE]": today_str,
-        "filter[SOURCE_ID]": "UC_YANDEX_GARAGE",
-        "select[]": ["ID", "SOURCE_ID"],
+    # Состоялось встреч — стадия "Пришел в офис" изменена сегодня
+    came_deals = await bx(session, "crm.deal.list", {
+        "filter[>=DATE_MODIFY]": today_str,
+        "filter[STAGE_ID]": "C5:UC_L3PZAL",
+        "select[]": ["ID", "TITLE", "STAGE_ID", "DATE_MODIFY"],
     })
-    garage_count = len(garage_deals) if isinstance(garage_deals, list) else 0
+    completed_count = len(came_deals) if isinstance(came_deals, list) else 0
+    logging.info(f"Пришел в офис: {completed_count}")
 
-    garage_leads = await bx(session, "crm.lead.list", {
-        "filter[>=DATE_CREATE]": today_str,
-        "filter[SOURCE_ID]": "UC_YANDEX_GARAGE",
-        "select[]": ["ID", "SOURCE_ID"],
-    })
-    garage_count += len(garage_leads) if isinstance(garage_leads, list) else 0
-
-    # 3. Встречи назначены сегодня (тип 2 = встреча, созданы сегодня)
-    meetings_planned = await bx(session, "crm.activity.list", {
-        "filter[>=CREATED]": today_str,
-        "filter[TYPE_ID]": 2,
-        "select[]": ["ID", "TYPE_ID", "COMPLETED", "CREATED", "DEADLINE"],
-    })
-    planned_count = len(meetings_planned) if isinstance(meetings_planned, list) else 0
-
-    # 4. Встречи состоялись (завершены сегодня)
-    completed_count = 0
-    if isinstance(meetings_planned, list):
-        for m in meetings_planned:
-            if m.get("COMPLETED") == "Y":
-                completed_count += 1
+    # Дебаг — все стадии
+    stages = await bx(session, "crm.dealcategory.stages", {"id": 5})
+    logging.info(f"Стадии воронки: {stages}")
 
     return {
         "avito": avito_count,
@@ -112,7 +96,6 @@ async def collect_stats(session):
 
 async def send_report(session):
     stats = await collect_stats(session)
-
     text = (
         f"📊 <b>Отчёт Моментум</b> — {stats['date']}\n"
         f"🕐 Накоплено за день (на {stats['time']} МСК)\n"
@@ -123,21 +106,14 @@ async def send_report(session):
         f"📅 Встречи назначены сегодня: <b>{stats['planned']}</b>\n"
         f"✅ Состоялось встреч: <b>{stats['completed']}</b>"
     )
-
     await tg_send(session, text)
     logging.info(f"Отчёт отправлен: {stats}")
 
 
 async def main():
-    logging.info("Бот запущен")
+    logging.info("Бот запущен v2")
     async with aiohttp.ClientSession() as session:
-        # Первый запуск — показываем источники для проверки
-        await get_sources(session)
-
-        # Отправляем первый отчёт сразу
         await send_report(session)
-
-        # Затем каждый час
         while True:
             await asyncio.sleep(3600)
             await send_report(session)
