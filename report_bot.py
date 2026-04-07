@@ -14,6 +14,10 @@ MSK = timezone(timedelta(hours=3))
 SOURCE_AVITO = "AVITO"
 SOURCE_GARAGE = "UC_98W3GU"
 
+# Поля встреч — найдём из сделки
+MEETING_PLANNED_FIELD = None
+MEETING_FACT_FIELD = None
+
 
 async def bx(session, method, params=None):
     url = f"{BITRIX_WEBHOOK}{method}.json"
@@ -42,16 +46,40 @@ async def tg_send(session, text):
 
 
 async def find_meeting_fields(session):
-    """Ищем пользовательские поля для дат встреч"""
-    fields = await bx(session, "crm.deal.userfield.list", {})
-    if isinstance(fields, list):
-        for f in fields:
-            name = f.get("FIELD_NAME", "")
-            label = f.get("EDIT_FORM_LABEL", {})
-            if isinstance(label, dict):
-                label = label.get("ru", "")
-            logging.info(f"Поле: {name} → {label}")
-    return fields
+    global MEETING_PLANNED_FIELD, MEETING_FACT_FIELD
+
+    # Берём сделку с заполненной датой встречи — "08.04 сплит авито"
+    deals = await bx(session, "crm.deal.list", {
+        "filter[TITLE]": "08.04 сплит авито",
+        "select[]": ["ID"],
+    })
+
+    if isinstance(deals, list) and deals:
+        deal_id = deals[0].get("ID")
+        deal = await bx(session, "crm.deal.get", {"id": deal_id})
+        if isinstance(deal, dict):
+            logging.info(f"Поля сделки {deal_id}:")
+            for k, v in deal.items():
+                if k.startswith("UF_") and v:
+                    logging.info(f"  {k} = {v}")
+
+    # Также пробуем получить метки через fields
+    fields_info = await bx(session, "crm.deal.fields", {})
+    if isinstance(fields_info, dict):
+        for fname, fdata in fields_info.items():
+            if fname.startswith("UF_"):
+                title = fdata.get("title", "")
+                if title:
+                    logging.info(f"Поле с title: {fname} → {title}")
+                    tl = title.lower()
+                    if "назнач" in tl and "встреч" in tl:
+                        MEETING_PLANNED_FIELD = fname
+                        logging.info(f"✅ Найдено поле назначена: {fname}")
+                    if ("факт" in tl or "фактич" in tl) and "встреч" in tl:
+                        MEETING_FACT_FIELD = fname
+                        logging.info(f"✅ Найдено поле фактическая: {fname}")
+
+    logging.info(f"Итог: назначена={MEETING_PLANNED_FIELD}, фактическая={MEETING_FACT_FIELD}")
 
 
 async def collect_stats(session):
@@ -76,43 +104,23 @@ async def collect_stats(session):
     })
     garage_count = len(garage_deals) if isinstance(garage_deals, list) else 0
 
-    # Находим поля встреч
-    fields = await bx(session, "crm.deal.userfield.list", {})
-    meeting_date_field = None
-    meeting_fact_field = None
-
-    if isinstance(fields, list):
-        for f in fields:
-            name = f.get("FIELD_NAME", "")
-            label = f.get("EDIT_FORM_LABEL", {})
-            if isinstance(label, dict):
-                label = label.get("ru", "")
-            label_lower = str(label).lower()
-            logging.info(f"Поле: {name} → {label}")
-            if "назнач" in label_lower and "встреч" in label_lower:
-                meeting_date_field = name
-            if ("факт" in label_lower or "фактич" in label_lower) and "встреч" in label_lower:
-                meeting_fact_field = name
-
-    logging.info(f"Поле назначена: {meeting_date_field}, Поле фактическая: {meeting_fact_field}")
-
-    # Встречи назначены сегодня
+    # Встречи
     planned_count = 0
-    if meeting_date_field:
+    completed_count = 0
+
+    if MEETING_PLANNED_FIELD:
         planned = await bx(session, "crm.deal.list", {
-            f"filter[>={meeting_date_field}]": today_str,
-            f"filter[<{meeting_date_field}]": today_end,
-            "select[]": ["ID", meeting_date_field],
+            f"filter[>={MEETING_PLANNED_FIELD}]": today_str,
+            f"filter[<{MEETING_PLANNED_FIELD}]": today_end,
+            "select[]": ["ID"],
         })
         planned_count = len(planned) if isinstance(planned, list) else 0
 
-    # Состоялось встреч сегодня
-    completed_count = 0
-    if meeting_fact_field:
+    if MEETING_FACT_FIELD:
         completed = await bx(session, "crm.deal.list", {
-            f"filter[>={meeting_fact_field}]": today_str,
-            f"filter[<{meeting_fact_field}]": today_end,
-            "select[]": ["ID", meeting_fact_field],
+            f"filter[>={MEETING_FACT_FIELD}]": today_str,
+            f"filter[<{MEETING_FACT_FIELD}]": today_end,
+            "select[]": ["ID"],
         })
         completed_count = len(completed) if isinstance(completed, list) else 0
 
@@ -145,11 +153,13 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v5")
+    logging.info("Бот запущен v6")
     async with aiohttp.ClientSession() as session:
+        await find_meeting_fields(session)
         await send_report(session)
         while True:
             await asyncio.sleep(3600)
+            await find_meeting_fields(session)
             await send_report(session)
 
 
