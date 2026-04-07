@@ -40,14 +40,19 @@ async def tg_send(session, text):
 
 async def collect_stats(session):
     now = datetime.now(MSK)
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    today_str = today_start.strftime("%Y-%m-%dT%H:%M:%S")
+    # Битрикс хранит даты в UTC — вычитаем 3 часа
+    today_utc = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(hours=3)
+    today_str = today_utc.strftime("%Y-%m-%dT%H:%M:%S")
 
-    # Все сделки за сегодня
+    logging.info(f"Фильтр от: {today_str}")
+
+    # Все сделки за сегодня — без фильтра по источнику сначала
     all_deals = await bx(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": today_str,
-        "select[]": ["ID", "SOURCE_ID", "TITLE", "STAGE_ID"],
+        "select[]": ["ID", "SOURCE_ID", "TITLE", "STAGE_ID", "DATE_CREATE"],
     })
+
+    logging.info(f"Всего сделок за сегодня: {len(all_deals) if isinstance(all_deals, list) else 0}")
 
     avito_count = 0
     garage_count = 0
@@ -56,33 +61,34 @@ async def collect_stats(session):
         for d in all_deals:
             src = str(d.get("SOURCE_ID", ""))
             title = str(d.get("TITLE", "")).lower()
-            logging.info(f"Сделка: {d.get('TITLE')} | SOURCE_ID={src}")
-            if src in ("AVITO", "avito") or "avito" in title:
+            logging.info(f"  Сделка: '{d.get('TITLE')}' | SOURCE={src} | STAGE={d.get('STAGE_ID')} | DATE={d.get('DATE_CREATE')}")
+            if "avito" in src.lower() or "avito" in title:
                 avito_count += 1
-            if "GARAGE" in src.upper() or "гараж" in title:
+            if "garage" in src.lower() or "гараж" in title or "gara" in src.lower():
                 garage_count += 1
 
-    # Встречи назначены сегодня — стадия "Пригласили в офис" изменена сегодня
-    invited_deals = await bx(session, "crm.deal.list", {
-        "filter[>=DATE_MODIFY]": today_str,
-        "filter[STAGE_ID]": "C5:UC_EVNSVS",
-        "select[]": ["ID", "TITLE", "STAGE_ID", "DATE_MODIFY"],
-    })
-    planned_count = len(invited_deals) if isinstance(invited_deals, list) else 0
-    logging.info(f"Пригласили в офис: {planned_count}")
+    # Все стадии всех воронок
+    categories = await bx(session, "crm.category.list", {"entityTypeId": 2})
+    logging.info(f"Воронки: {categories}")
 
-    # Состоялось встреч — стадия "Пришел в офис" изменена сегодня
-    came_deals = await bx(session, "crm.deal.list", {
-        "filter[>=DATE_MODIFY]": today_str,
-        "filter[STAGE_ID]": "C5:UC_L3PZAL",
-        "select[]": ["ID", "TITLE", "STAGE_ID", "DATE_MODIFY"],
-    })
-    completed_count = len(came_deals) if isinstance(came_deals, list) else 0
-    logging.info(f"Пришел в офис: {completed_count}")
+    if isinstance(categories, dict):
+        cats = categories.get("categories", [])
+        for cat in cats:
+            stages = await bx(session, "crm.dealcategory.stages", {"id": cat.get("id", 0)})
+            logging.info(f"Стадии воронки {cat.get('name')}: {[(s.get('STATUS_ID'), s.get('NAME')) for s in (stages if isinstance(stages, list) else [])]}")
 
-    # Дебаг — все стадии
-    stages = await bx(session, "crm.dealcategory.stages", {"id": 5})
-    logging.info(f"Стадии воронки: {stages}")
+    # Встречи — ищем сделки в стадии "Пригласили в офис" изменённые сегодня
+    planned_count = 0
+    completed_count = 0
+
+    if isinstance(all_deals, list):
+        for d in all_deals:
+            stage = str(d.get("STAGE_ID", ""))
+            title = str(d.get("TITLE", "")).lower()
+            if "invited" in stage.lower() or "пригласил" in title or "UC_EVNSVS" in stage:
+                planned_count += 1
+            if "came" in stage.lower() or "пришел" in title or "UC_L3PZAL" in stage:
+                completed_count += 1
 
     return {
         "avito": avito_count,
@@ -111,7 +117,7 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v2")
+    logging.info("Бот запущен v3")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
