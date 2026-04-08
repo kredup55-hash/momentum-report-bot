@@ -75,11 +75,11 @@ async def collect_stats(session):
 
     logging.info(f"Всего сделок: {len(all_deals)} | Источники: {sources}")
 
-    # === ТОЧНО КАК В ТВОЁМ ФИЛЬТРЕ БИТРИКСА ===
+    # Точно как в твоём фильтре
     avito_count = (
         sources.get("CALL", 0) +           # Звонок
-        sources.get("AVITO", 0) +          # Avito
-        sources.get("AVITO_COMAGIC", 0) +  # Avito (Comagic)
+        sources.get("AVITO", 0) +
+        sources.get("AVITO_COMAGIC", 0) +
         sources.get("UC_Y6UT3Y", 0)        # Авито. Аренда
     )
 
@@ -106,11 +106,13 @@ async def collect_stats(session):
         "completed": len(completed),
         "time": now.strftime("%H:%M"),
         "date": now.strftime("%d.%m.%Y"),
+        "sources": sources,   # для отладки
     }
 
 
 async def send_report(session):
     stats = await collect_stats(session)
+    
     text = (
         f"📊 <b>Отчёт Моментум</b> — {stats['date']}\n"
         f"🕐 Накоплено за день (на {stats['time']} МСК)\n"
@@ -119,14 +121,15 @@ async def send_report(session):
         f"🚗 Лиды с гаража: <b>{stats['garage']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📅 Встречи назначены сегодня: <b>{stats['planned']}</b>\n"
-        f"✅ Состоялось встреч: <b>{stats['completed']}</b>"
+        f"✅ Состоялось встреч: <b>{stats['completed']}</b>\n\n"
+        f"<i>Разбивка Авито: CALL={stats['sources'].get('CALL',0)} + AVITO={stats['sources'].get('AVITO',0)} + AVITO_COMAGIC={stats['sources'].get('AVITO_COMAGIC',0)} + Авито.Аренда={stats['sources'].get('UC_Y6UT3Y',0)}</i>"
     )
     await tg_send(session, text)
-    logging.info(f"Отчёт отправлен: {stats}")
+    logging.info(f"Отчёт отправлен: Авито={stats['avito']}")
 
 
 async def main():
-    logging.info("Бот запущен v20 — Авито = Звонок + Avito + Авито.Аренда (точно как в фильтре)")
+    logging.info("Бот запущен v21 — с разбивкой по источникам")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
