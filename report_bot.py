@@ -75,12 +75,12 @@ async def collect_stats(session):
 
     logging.info(f"Всего сделок: {len(all_deals)} | Источники: {sources}")
 
-    # Точно как в твоём фильтре
+    # === ТОЧНО КАК В ТВОЁМ ФИЛЬТРЕ БИТРИКСА ===
     avito_count = (
-        sources.get("CALL", 0) +           # Звонок
-        sources.get("AVITO", 0) +
-        sources.get("AVITO_COMAGIC", 0) +
-        sources.get("UC_Y6UT3Y", 0)        # Авито. Аренда
+        sources.get("CALL", 0) +            # Звонок
+        sources.get("AVITO", 0) +           # Avito
+        sources.get("AVITO_COMAGIC", 0) +   # Avito (через Comagic/UIS)
+        sources.get("UC_Y6UT3Y", 0)         # Авито.Аренда
     )
 
     garage_count = sources.get("UC_98W3GU", 0)
@@ -106,7 +106,9 @@ async def collect_stats(session):
         "completed": len(completed),
         "time": now.strftime("%H:%M"),
         "date": now.strftime("%d.%m.%Y"),
-        "sources": sources,   # для отладки
+        "call": sources.get("CALL", 0),
+        "avito_comagic": sources.get("AVITO_COMAGIC", 0),
+        "uc_y6ut3y": sources.get("UC_Y6UT3Y", 0),
     }
 
 
@@ -122,14 +124,14 @@ async def send_report(session):
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📅 Встречи назначены сегодня: <b>{stats['planned']}</b>\n"
         f"✅ Состоялось встреч: <b>{stats['completed']}</b>\n\n"
-        f"<i>Разбивка Авито: CALL={stats['sources'].get('CALL',0)} + AVITO={stats['sources'].get('AVITO',0)} + AVITO_COMAGIC={stats['sources'].get('AVITO_COMAGIC',0)} + Авито.Аренда={stats['sources'].get('UC_Y6UT3Y',0)}</i>"
+        f"<i>Разбивка Авито: Звонок={stats['call']} + AVITO_COMAGIC={stats['avito_comagic']} + Авито.Аренда={stats['uc_y6ut3y']}</i>"
     )
     await tg_send(session, text)
     logging.info(f"Отчёт отправлен: Авито={stats['avito']}")
 
 
 async def main():
-    logging.info("Бот запущен v21 — с разбивкой по источникам")
+    logging.info("Бот запущен v23 — точно как фильтр в Битриксе (Звонок + Avito + Авито.Аренда)")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
