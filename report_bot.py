@@ -75,12 +75,11 @@ async def collect_stats(session):
 
     logging.info(f"Всего сделок: {len(all_deals)} | Источники: {sources}")
 
-    # === ТОЧНО КАК В ТВОЁМ ФИЛЬТРЕ БИТРИКСА ===
+    # === Только чистые источники Авито (без CALL) — ближе всего к твоему фильтру ===
     avito_count = (
-        sources.get("CALL", 0) +            # Звонок
-        sources.get("AVITO", 0) +           # Avito
-        sources.get("AVITO_COMAGIC", 0) +   # Avito (через Comagic/UIS)
-        sources.get("UC_Y6UT3Y", 0)         # Авито.Аренда
+        sources.get("AVITO", 0) +
+        sources.get("AVITO_COMAGIC", 0) +
+        sources.get("UC_Y6UT3Y", 0)        # Авито.Аренда
     )
 
     garage_count = sources.get("UC_98W3GU", 0)
@@ -106,15 +105,11 @@ async def collect_stats(session):
         "completed": len(completed),
         "time": now.strftime("%H:%M"),
         "date": now.strftime("%d.%m.%Y"),
-        "call": sources.get("CALL", 0),
-        "avito_comagic": sources.get("AVITO_COMAGIC", 0),
-        "uc_y6ut3y": sources.get("UC_Y6UT3Y", 0),
     }
 
 
 async def send_report(session):
     stats = await collect_stats(session)
-    
     text = (
         f"📊 <b>Отчёт Моментум</b> — {stats['date']}\n"
         f"🕐 Накоплено за день (на {stats['time']} МСК)\n"
@@ -123,15 +118,14 @@ async def send_report(session):
         f"🚗 Лиды с гаража: <b>{stats['garage']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📅 Встречи назначены сегодня: <b>{stats['planned']}</b>\n"
-        f"✅ Состоялось встреч: <b>{stats['completed']}</b>\n\n"
-        f"<i>Разбивка Авито: Звонок={stats['call']} + AVITO_COMAGIC={stats['avito_comagic']} + Авито.Аренда={stats['uc_y6ut3y']}</i>"
+        f"✅ Состоялось встреч: <b>{stats['completed']}</b>"
     )
     await tg_send(session, text)
     logging.info(f"Отчёт отправлен: Авито={stats['avito']}")
 
 
 async def main():
-    logging.info("Бот запущен v23 — точно как фильтр в Битриксе (Звонок + Avito + Авито.Аренда)")
+    logging.info("Бот запущен v24 — Авито без CALL (максимально близко к фильтру в Битриксе)")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
