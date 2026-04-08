@@ -75,11 +75,12 @@ async def collect_stats(session):
 
     logging.info(f"Всего сделок: {len(all_deals)} | Источники: {sources}")
 
-    # === Только чистые источники Авито (без CALL) — ближе всего к твоему фильтру ===
+    # Основной подсчёт Авито (можно быстро менять)
     avito_count = (
-        sources.get("AVITO", 0) +
-        sources.get("AVITO_COMAGIC", 0) +
-        sources.get("UC_Y6UT3Y", 0)        # Авито.Аренда
+        sources.get("CALL", 0) + 
+        sources.get("AVITO", 0) + 
+        sources.get("AVITO_COMAGIC", 0) + 
+        sources.get("UC_Y6UT3Y", 0)
     )
 
     garage_count = sources.get("UC_98W3GU", 0)
@@ -96,8 +97,6 @@ async def collect_stats(session):
         "select[]": ["ID"],
     })
 
-    logging.info(f"Итог → Авито={avito_count} | Гараж={garage_count} | Назначено={len(planned)} | Состоялось={len(completed)}")
-
     return {
         "avito": avito_count,
         "garage": garage_count,
@@ -105,11 +104,13 @@ async def collect_stats(session):
         "completed": len(completed),
         "time": now.strftime("%H:%M"),
         "date": now.strftime("%d.%m.%Y"),
+        "sources": sources
     }
 
 
 async def send_report(session):
     stats = await collect_stats(session)
+    
     text = (
         f"📊 <b>Отчёт Моментум</b> — {stats['date']}\n"
         f"🕐 Накоплено за день (на {stats['time']} МСК)\n"
@@ -118,14 +119,20 @@ async def send_report(session):
         f"🚗 Лиды с гаража: <b>{stats['garage']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📅 Встречи назначены сегодня: <b>{stats['planned']}</b>\n"
-        f"✅ Состоялось встреч: <b>{stats['completed']}</b>"
+        f"✅ Состоялось встреч: <b>{stats['completed']}</b>\n\n"
+        f"<b>Разбивка источников:</b>\n"
+        f"• CALL (Звонок): {stats['sources'].get('CALL', 0)}\n"
+        f"• AVITO_COMAGIC: {stats['sources'].get('AVITO_COMAGIC', 0)}\n"
+        f"• AVITO: {stats['sources'].get('AVITO', 0)}\n"
+        f"• UC_Y6UT3Y (Авито.Аренда): {stats['sources'].get('UC_Y6UT3Y', 0)}\n"
+        f"• UC_98W3GU (Гараж): {stats['sources'].get('UC_98W3GU', 0)}"
     )
     await tg_send(session, text)
     logging.info(f"Отчёт отправлен: Авито={stats['avito']}")
 
 
 async def main():
-    logging.info("Бот запущен v24 — Авито без CALL (максимально близко к фильтру в Битриксе)")
+    logging.info("Бот запущен v25 — с полной разбивкой источников")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
