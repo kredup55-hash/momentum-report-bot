@@ -60,6 +60,8 @@ async def collect_stats(session):
     date_from = today_start.strftime("%Y-%m-%d 00:00:00")
     date_to   = tomorrow_start.strftime("%Y-%m-%d 00:00:00")
 
+    logging.info(f"Сбор данных за текущий день (00:00 — сейчас): {date_from} — {date_to}")
+
     all_deals = await bx_all(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": date_from,
         "filter[<DATE_CREATE]": date_to,
@@ -78,7 +80,7 @@ async def collect_stats(session):
         sources.get("UC_Y6UT3Y", 0)
     )
 
-    garage_count = sources.get("UC_98W3GU", 0)
+    garage_count = sources.get("UC_98W3GU", 0)   # ВСЕ стадии
 
     planned = await bx_all(session, "crm.deal.list", {
         f"filter[>={MEETING_PLANNED_FIELD}]": today_start.strftime("%Y-%m-%dT00:00:00+03:00"),
@@ -92,6 +94,8 @@ async def collect_stats(session):
         "select[]": ["ID"],
     })
 
+    logging.info(f"Итог на {now.strftime('%H:%M')}: Авито={avito_count} | Гараж={garage_count} | Назначено={len(planned)} | Состоялось={len(completed)}")
+
     return {
         "avito": avito_count,
         "garage": garage_count,
@@ -99,9 +103,6 @@ async def collect_stats(session):
         "completed": len(completed),
         "time": now.strftime("%H:%M"),
         "date": now.strftime("%d.%m.%Y"),
-        "call": sources.get("CALL", 0),
-        "avito_comagic": sources.get("AVITO_COMAGIC", 0),
-        "uc_y6ut3y": sources.get("UC_Y6UT3Y", 0),
     }
 
 
@@ -115,18 +116,20 @@ async def send_report(session):
         f"🚗 Лиды с гаража: <b>{stats['garage']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📅 Встречи назначены сегодня: <b>{stats['planned']}</b>\n"
-        f"✅ Состоялось встреч: <b>{stats['completed']}</b>\n\n"
-        f"<i>Разбивка: Звонок={stats['call']} + Avito={stats['avito_comagic']} + Авито.Аренда={stats['uc_y6ut3y']}</i>"
+        f"✅ Состоялось встреч: <b>{stats['completed']}</b>"
     )
     await tg_send(session, text)
+    logging.info(f"Отчёт отправлен")
 
 
 async def main():
-    logging.info("Бот запущен v26 — точно соответствует фильтру Битрикса")
+    logging.info("Бот запущен v31 — отчёт каждый час, день с 00:00 по 00:00")
+
     async with aiohttp.ClientSession() as session:
-        await send_report(session)
+        await send_report(session)   # сразу при старте
+
         while True:
-            await asyncio.sleep(3600)
+            await asyncio.sleep(3600)   # каждый час
             await send_report(session)
 
 
