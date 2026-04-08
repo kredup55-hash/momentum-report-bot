@@ -82,7 +82,7 @@ async def collect_stats(session):
 
     logging.info(f"Всего сделок: {len(all_deals)} | Источники: {sources}")
 
-    avito_count = sources.get("AVITO", 0) + sources.get("AVITO_COMAGIC", 0)
+    avito_count = sources.get("AVITO", 0) + sources.get("AVITO_COMAGIC", 0) + sources.get("CALL", 0)
     garage_count = sources.get("UC_98W3GU", 0)
 
     # Встречи с пагинацией
@@ -129,7 +129,7 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v13")
+    logging.info("Бот запущен v14")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
