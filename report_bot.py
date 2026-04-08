@@ -19,10 +19,30 @@ async def bx(session, method, params=None):
     try:
         async with session.get(url, params=params or {}, timeout=aiohttp.ClientTimeout(total=15)) as r:
             data = await r.json()
-            return data.get("result", [])
+            return data
     except Exception as e:
         logging.error(f"Bitrix error {method}: {e}")
-        return []
+        return {}
+
+
+async def bx_all(session, method, params=None):
+    """Получаем все записи с пагинацией"""
+    all_results = []
+    start = 0
+    while True:
+        p = dict(params or {})
+        p["start"] = start
+        data = await bx(session, method, p)
+        result = data.get("result", [])
+        if not result:
+            break
+        all_results.extend(result)
+        total = data.get("total", 0)
+        if len(all_results) >= total:
+            break
+        start += 50
+        await asyncio.sleep(0.2)
+    return all_results
 
 
 async def tg_send(session, text):
@@ -48,42 +68,37 @@ async def collect_stats(session):
     today_msk_str = today_msk.strftime("%Y-%m-%dT%H:%M:%S+03:00")
     today_msk_end = (today_msk + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S+03:00")
 
-    # Все сделки за сегодня — смотрим реальные SOURCE_ID
-    all_deals = await bx(session, "crm.deal.list", {
+    # Все сделки за сегодня с пагинацией
+    all_deals = await bx_all(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": today_utc_str,
         "filter[<DATE_CREATE]": today_utc_end,
-        "select[]": ["ID", "SOURCE_ID", "DATE_CREATE"],
+        "select[]": ["ID", "SOURCE_ID"],
     })
 
     sources = {}
-    if isinstance(all_deals, list):
-        for d in all_deals:
-            src = d.get("SOURCE_ID", "нет")
-            sources[src] = sources.get(src, 0) + 1
-    logging.info(f"Все источники за сегодня: {sources}")
-    logging.info(f"Всего сделок: {len(all_deals) if isinstance(all_deals, list) else 0}")
+    for d in all_deals:
+        src = d.get("SOURCE_ID", "нет")
+        sources[src] = sources.get(src, 0) + 1
 
-    # Считаем Авито — все варианты
+    logging.info(f"Всего сделок: {len(all_deals)} | Источники: {sources}")
+
     avito_count = sources.get("AVITO", 0) + sources.get("AVITO_COMAGIC", 0)
     garage_count = sources.get("UC_98W3GU", 0)
 
-    logging.info(f"Авито (AVITO + AVITO_COMAGIC): {avito_count}")
-    logging.info(f"Гараж (UC_98W3GU): {garage_count}")
-
-    # Встречи
-    planned = await bx(session, "crm.deal.list", {
+    # Встречи с пагинацией
+    planned = await bx_all(session, "crm.deal.list", {
         f"filter[>={MEETING_PLANNED_FIELD}]": today_msk_str,
         f"filter[<{MEETING_PLANNED_FIELD}]": today_msk_end,
         "select[]": ["ID"],
     })
-    planned_count = len(planned) if isinstance(planned, list) else 0
+    planned_count = len(planned)
 
-    completed = await bx(session, "crm.deal.list", {
+    completed = await bx_all(session, "crm.deal.list", {
         f"filter[>={MEETING_FACT_FIELD}]": today_msk_str,
         f"filter[<{MEETING_FACT_FIELD}]": today_msk_end,
         "select[]": ["ID"],
     })
-    completed_count = len(completed) if isinstance(completed, list) else 0
+    completed_count = len(completed)
 
     logging.info(f"Итог: Авито={avito_count} Гараж={garage_count} Встречи={planned_count} Состоялось={completed_count}")
 
@@ -114,7 +129,7 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v12")
+    logging.info("Бот запущен v13")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
