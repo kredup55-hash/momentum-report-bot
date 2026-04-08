@@ -11,24 +11,21 @@ BITRIX_WEBHOOK = "https://momentum-techit.bitrix24.ru/rest/2790/56agqwjf3rysukb8
 
 MSK = timezone(timedelta(hours=3))
 
-# Поля встреч (подтверждены)
-MEETING_PLANNED_FIELD = "UF_CRM_1756299008904"   # Дата встречи назначена
-MEETING_FACT_FIELD = "UF_CRM_1756299040214"       # Дата встречи фактическая
+MEETING_PLANNED_FIELD = "UF_CRM_1756299008904"
+MEETING_FACT_FIELD = "UF_CRM_1756299040214"
 
 
 async def bx(session, method, params=None):
     url = f"{BITRIX_WEBHOOK}{method}.json"
     try:
-        async with session.get(url, params=params or {}, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            data = await r.json()
-            return data
+        async with session.get(url, params=params or {}, timeout=aiohttp.ClientTimeout(total=20)) as r:
+            return await r.json()
     except Exception as e:
         logging.error(f"Bitrix error {method}: {e}")
         return {}
 
 
 async def bx_all(session, method, params=None):
-    """Получаем ВСЕ записи с пагинацией (Bitrix отдаёт максимум 50)"""
     all_results = []
     start = 0
     while True:
@@ -42,21 +39,15 @@ async def bx_all(session, method, params=None):
         if len(result) < 50:
             break
         start += 50
-        await asyncio.sleep(0.3)  # небольшая задержка чтобы не словить лимит
+        await asyncio.sleep(0.25)
     return all_results
 
 
 async def tg_send(session, text):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
-        async with session.post(url, json={
-            "chat_id": TG_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML"
-        }) as r:
-            result = await r.json()
-            if not result.get("ok"):
-                logging.error(f"TG send error: {result}")
+        async with session.post(url, json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"}) as r:
+            await r.json()
     except Exception as e:
         logging.error(f"TG error: {e}")
 
@@ -66,15 +57,14 @@ async def collect_stats(session):
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow_start = today_start + timedelta(days=1)
 
-    today_start_str = today_start.strftime("%Y-%m-%d 00:00:00")
-    tomorrow_start_str = tomorrow_start.strftime("%Y-%m-%d 00:00:00")
+    date_from = today_start.strftime("%Y-%m-%d 00:00:00")
+    date_to   = tomorrow_start.strftime("%Y-%m-%d 00:00:00")
 
-    logging.info(f"Фильтр DATE_CREATE: {today_start_str} — {tomorrow_start_str} (МСК)")
+    logging.info(f"Фильтр DATE_CREATE (МСК 00:00–00:00): {date_from} — {date_to}")
 
-    # === Все сделки за сегодня ===
     all_deals = await bx_all(session, "crm.deal.list", {
-        "filter[>=DATE_CREATE]": today_start_str,
-        "filter[<DATE_CREATE]": tomorrow_start_str,
+        "filter[>=DATE_CREATE]": date_from,
+        "filter[<DATE_CREATE]": date_to,
         "select[]": ["ID", "SOURCE_ID"],
     })
 
@@ -83,18 +73,18 @@ async def collect_stats(session):
         src = d.get("SOURCE_ID") or "нет"
         sources[src] = sources.get(src, 0) + 1
 
-    logging.info(f"Всего сделок за день: {len(all_deals)} | Источники: {sources}")
+    logging.info(f"Всего сделок: {len(all_deals)} | Источники: {sources}")
 
-    # Авито (по твоему подтверждению)
+    # === ТОЧНО КАК В ТВОЁМ ФИЛЬТРЕ БИТРИКСА ===
     avito_count = (
-        sources.get("AVITO", 0) +
-        sources.get("AVITO_COMAGIC", 0) +
-        sources.get("CALL", 0) +
-        sources.get("UC_Y6UT3Y", 0)   # Авито.Аренда
+        sources.get("CALL", 0) +           # Звонок
+        sources.get("AVITO", 0) +          # Avito
+        sources.get("AVITO_COMAGIC", 0) +  # Avito (Comagic)
+        sources.get("UC_Y6UT3Y", 0)        # Авито. Аренда
     )
+
     garage_count = sources.get("UC_98W3GU", 0)
 
-    # === Встречи ===
     planned = await bx_all(session, "crm.deal.list", {
         f"filter[>={MEETING_PLANNED_FIELD}]": today_start.strftime("%Y-%m-%dT00:00:00+03:00"),
         f"filter[<{MEETING_PLANNED_FIELD}]": tomorrow_start.strftime("%Y-%m-%dT00:00:00+03:00"),
@@ -107,7 +97,7 @@ async def collect_stats(session):
         "select[]": ["ID"],
     })
 
-    logging.info(f"Итог: Авито={avito_count} | Гараж={garage_count} | Назначено={len(planned)} | Состоялось={len(completed)}")
+    logging.info(f"Итог → Авито={avito_count} | Гараж={garage_count} | Назначено={len(planned)} | Состоялось={len(completed)}")
 
     return {
         "avito": avito_count,
@@ -136,11 +126,11 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v18 (00:00–00:00 МСК)")
+    logging.info("Бот запущен v20 — Авито = Звонок + Avito + Авито.Аренда (точно как в фильтре)")
     async with aiohttp.ClientSession() as session:
-        await send_report(session)          # сразу при старте
+        await send_report(session)
         while True:
-            await asyncio.sleep(3600)       # каждый час
+            await asyncio.sleep(3600)
             await send_report(session)
 
 
