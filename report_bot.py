@@ -44,19 +44,20 @@ async def tg_send(session, text):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     for attempt in range(1, 6):
         try:
-            logging.info(f"Попытка отправки #{attempt}")
+            logging.info(f"Попытка отправки отчёта #{attempt}")
             async with session.post(url, json={
                 "chat_id": TG_CHAT_ID,
                 "text": text
             }, timeout=aiohttp.ClientTimeout(total=15)) as r:
                 result = await r.json()
                 if result.get("ok"):
-                    logging.info("✅ Отчёт отправлен успешно")
-                    return
+                    logging.info(f"✅ Отчёт успешно отправлен с попытки {attempt}")
+                    return True
         except Exception as e:
             logging.error(f"Попытка {attempt} не удалась: {e}")
         await asyncio.sleep(3)
     logging.error("❌ Не удалось отправить отчёт после 5 попыток")
+    return False
 
 
 async def collect_stats(session):
@@ -67,7 +68,7 @@ async def collect_stats(session):
     date_from = today_start.strftime("%Y-%m-%d 00:00:00")
     date_to = tomorrow_start.strftime("%Y-%m-%d 00:00:00")
 
-    logging.info(f"Сбор данных за {today_start.strftime('%d.%m.%Y')}")
+    logging.info(f"Сбор данных за день {today_start.strftime('%d.%m')}")
 
     all_deals = await bx_all(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": date_from,
@@ -80,12 +81,18 @@ async def collect_stats(session):
         src = d.get("SOURCE_ID") or "нет"
         sources[src] = sources.get(src, 0) + 1
 
-    avito = sources.get("CALL", 0) + sources.get("AVITO", 0) + sources.get("AVITO_COMAGIC", 0) + sources.get("UC_Y6UT3Y", 0)
-    garage = sources.get("UC_98W3GU", 0)
+    avito_count = (
+        sources.get("CALL", 0) +
+        sources.get("AVITO", 0) +
+        sources.get("AVITO_COMAGIC", 0) +
+        sources.get("UC_Y6UT3Y", 0)
+    )
+
+    garage_count = sources.get("UC_98W3GU", 0)
 
     return {
-        "avito": avito,
-        "garage": garage,
+        "avito": avito_count,
+        "garage": garage_count,
         "time": now.strftime("%H:%M"),
         "date": today_start.strftime("%d.%m.%Y"),
     }
@@ -102,7 +109,20 @@ async def send_report(session):
 Встречи назначены сегодня: {stats.get('planned', 0)}
 Состоялось встреч: {stats.get('completed', 0)}
 """
+
     await tg_send(session, text)
 
 
 async def main():
+    logging.info("Бот запущен v35 — стабильная версия")
+
+    async with aiohttp.ClientSession() as session:
+        await send_report(session)
+
+        while True:
+            await asyncio.sleep(3600)
+            await send_report(session)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
