@@ -40,29 +40,23 @@ async def bx_all(session, method, params=None):
     return all_results
 
 
-async def tg_send(session, text, retries=5):
+async def tg_send(session, text):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    for attempt in range(1, retries + 1):
+    for attempt in range(1, 6):
         try:
-            logging.info(f"Попытка #{attempt} отправки отчёта...")
+            logging.info(f"Попытка отправки #{attempt}")
             async with session.post(url, json={
                 "chat_id": TG_CHAT_ID,
-                "text": text,
-                "parse_mode": ""   # отключаем форматирование
-            }, timeout=aiohttp.ClientTimeout(total=20)) as r:
+                "text": text
+            }, timeout=aiohttp.ClientTimeout(total=15)) as r:
                 result = await r.json()
                 if result.get("ok"):
-                    logging.info(f"✅ УСПЕХ! Отчёт отправлен с попытки {attempt}")
-                    return True
-                else:
-                    logging.error(f"TG API error: {result}")
+                    logging.info("✅ Отчёт отправлен успешно")
+                    return
         except Exception as e:
-            logging.error(f"Попытка {attempt} упала: {e}")
-        
+            logging.error(f"Попытка {attempt} не удалась: {e}")
         await asyncio.sleep(3)
-    
-    logging.error("❌ Не удалось отправить отчёт после всех попыток")
-    return False
+    logging.error("❌ Не удалось отправить отчёт после 5 попыток")
 
 
 async def collect_stats(session):
@@ -71,9 +65,9 @@ async def collect_stats(session):
     tomorrow_start = today_start + timedelta(days=1)
 
     date_from = today_start.strftime("%Y-%m-%d 00:00:00")
-    date_to   = tomorrow_start.strftime("%Y-%m-%d 00:00:00")
+    date_to = tomorrow_start.strftime("%Y-%m-%d 00:00:00")
 
-    logging.info(f"Сбор данных за день {today_start.strftime('%d.%m')}")
+    logging.info(f"Сбор данных за {today_start.strftime('%d.%m.%Y')}")
 
     all_deals = await bx_all(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": date_from,
@@ -86,70 +80,29 @@ async def collect_stats(session):
         src = d.get("SOURCE_ID") or "нет"
         sources[src] = sources.get(src, 0) + 1
 
-    avito_count = (
-        sources.get("CALL", 0) +
-        sources.get("AVITO", 0) +
-        sources.get("AVITO_COMAGIC", 0) +
-        sources.get("UC_Y6UT3Y", 0)
-    )
-
-    garage_count = sources.get("UC_98W3GU", 0)
-
-    planned = await bx_all(session, "crm.deal.list", {
-        f"filter[>={MEETING_PLANNED_FIELD}]": today_start.strftime("%Y-%m-%dT00:00:00+03:00"),
-        f"filter[<{MEETING_PLANNED_FIELD}]": tomorrow_start.strftime("%Y-%m-%dT00:00:00+03:00"),
-        "select[]": ["ID"],
-    })
-
-    completed = await bx_all(session, "crm.deal.list", {
-        f"filter[>={MEETING_FACT_FIELD}]": today_start.strftime("%Y-%m-%dT00:00:00+03:00"),
-        f"filter[<{MEETING_FACT_FIELD}]": tomorrow_start.strftime("%Y-%m-%dT00:00:00+03:00"),
-        "select[]": ["ID"],
-    })
+    avito = sources.get("CALL", 0) + sources.get("AVITO", 0) + sources.get("AVITO_COMAGIC", 0) + sources.get("UC_Y6UT3Y", 0)
+    garage = sources.get("UC_98W3GU", 0)
 
     return {
-        "avito": avito_count,
-        "garage": garage_count,
-        "planned": len(planned),
-        "completed": len(completed),
+        "avito": avito,
+        "garage": garage,
         "time": now.strftime("%H:%M"),
         "date": today_start.strftime("%d.%m.%Y"),
     }
 
 
 async def send_report(session):
-    logging.info("=== НАЧИНАЕМ ФОРМИРОВАНИЕ ОТЧЁТА ===")
     stats = await collect_stats(session)
-    
     text = f"""Отчёт Моментум — {stats['date']}
 Накоплено за день (на {stats['time']} МСК)
 ────────────────────
 Контакты с Авито: {stats['avito']}
 Лиды с гаража: {stats['garage']}
 ────────────────────
-Встречи назначены сегодня: {stats['planned']}
-Состоялось встреч: {stats['completed']}
+Встречи назначены сегодня: {stats.get('planned', 0)}
+Состоялось встреч: {stats.get('completed', 0)}
 """
-
-    logging.info("Пытаемся отправить отчёт...")
-    success = await tg_send(session, text)
-    
-    if success:
-        logging.info(f"✅ Отчёт за {stats['time']} успешно отправлен")
-    else:
-        logging.error(f"❌ КРИТИЧНО: Отчёт за {stats['time']} НЕ отправлен!")
+    await tg_send(session, text)
 
 
 async def main():
-    logging.info("Бот запущен v35 — полный отчёт каждый час (простой текст)")
-
-    async with aiohttp.ClientSession() as session:
-        await send_report(session)
-
-        while True:
-            await asyncio.sleep(3600)
-            await send_report(session)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
