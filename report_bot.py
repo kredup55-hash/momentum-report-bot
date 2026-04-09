@@ -11,6 +11,9 @@ BITRIX_WEBHOOK = "https://momentum-techit.bitrix24.ru/rest/2790/56agqwjf3rysukb8
 
 MSK = timezone(timedelta(hours=3))
 
+MEETING_PLANNED_FIELD = "UF_CRM_1756299008904"
+MEETING_FACT_FIELD = "UF_CRM_1756299040214"
+
 
 async def bx(session, method, params=None):
     url = f"{BITRIX_WEBHOOK}{method}.json"
@@ -59,9 +62,9 @@ async def tg_send(session, text, retries=3):
             logging.error(f"TG send attempt {attempt+1} failed: {e}")
         
         if attempt < retries - 1:
-            await asyncio.sleep(2)  # пауза перед повтором
+            await asyncio.sleep(2)
     
-    logging.error("Не удалось отправить отчёт в Telegram после 3 попыток")
+    logging.error("Не удалось отправить отчёт после 3 попыток")
     return False
 
 
@@ -95,9 +98,24 @@ async def collect_stats(session):
 
     garage_count = sources.get("UC_98W3GU", 0)
 
+    # Встречи
+    planned = await bx_all(session, "crm.deal.list", {
+        f"filter[>={MEETING_PLANNED_FIELD}]": today_start.strftime("%Y-%m-%dT00:00:00+03:00"),
+        f"filter[<{MEETING_PLANNED_FIELD}]": tomorrow_start.strftime("%Y-%m-%dT00:00:00+03:00"),
+        "select[]": ["ID"],
+    })
+
+    completed = await bx_all(session, "crm.deal.list", {
+        f"filter[>={MEETING_FACT_FIELD}]": today_start.strftime("%Y-%m-%dT00:00:00+03:00"),
+        f"filter[<{MEETING_FACT_FIELD}]": tomorrow_start.strftime("%Y-%m-%dT00:00:00+03:00"),
+        "select[]": ["ID"],
+    })
+
     return {
         "avito": avito_count,
         "garage": garage_count,
+        "planned": len(planned),
+        "completed": len(completed),
         "time": now.strftime("%H:%M"),
         "date": today_start.strftime("%d.%m.%Y"),
     }
@@ -110,7 +128,10 @@ async def send_report(session):
         f"🕐 Накоплено за день (на {stats['time']} МСК)\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📱 Контакты с Авито: <b>{stats['avito']}</b>\n"
-        f"🚗 Лиды с гаража: <b>{stats['garage']}</b>"
+        f"🚗 Лиды с гаража: <b>{stats['garage']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📅 Встречи назначены сегодня: <b>{stats['planned']}</b>\n"
+        f"✅ Состоялось встреч: <b>{stats['completed']}</b>"
     )
     
     success = await tg_send(session, text)
@@ -121,15 +142,10 @@ async def send_report(session):
 
 
 async def main():
-    logging.info("Бот запущен v32 — отчёт каждый час с улучшенной отправкой")
+    logging.info("Бот запущен v33 — полный отчёт каждый час")
 
     async with aiohttp.ClientSession() as session:
         await send_report(session)   # сразу при старте
 
         while True:
-            await asyncio.sleep(3600)
-            await send_report(session)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+            await asyncio.sleep(3600)   # каждый
