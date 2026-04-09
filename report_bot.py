@@ -11,6 +11,9 @@ BITRIX_WEBHOOK = "https://momentum-techit.bitrix24.ru/rest/2790/56agqwjf3rysukb8
 
 MSK = timezone(timedelta(hours=3))
 
+MEETING_PLANNED_FIELD = "UF_CRM_1756299008904"
+MEETING_FACT_FIELD = "UF_CRM_1756299040214"
+
 
 async def bx(session, method, params=None):
     url = f"{BITRIX_WEBHOOK}{method}.json"
@@ -42,22 +45,11 @@ async def bx_all(session, method, params=None):
 
 async def tg_send(session, text):
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-    for attempt in range(1, 6):
-        try:
-            logging.info(f"Попытка отправки отчёта #{attempt}")
-            async with session.post(url, json={
-                "chat_id": TG_CHAT_ID,
-                "text": text
-            }, timeout=aiohttp.ClientTimeout(total=15)) as r:
-                result = await r.json()
-                if result.get("ok"):
-                    logging.info(f"✅ Отчёт успешно отправлен с попытки {attempt}")
-                    return True
-        except Exception as e:
-            logging.error(f"Попытка {attempt} не удалась: {e}")
-        await asyncio.sleep(3)
-    logging.error("❌ Не удалось отправить отчёт после 5 попыток")
-    return False
+    try:
+        async with session.post(url, json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"}) as r:
+            await r.json()
+    except Exception as e:
+        logging.error(f"TG error: {e}")
 
 
 async def collect_stats(session):
@@ -66,9 +58,7 @@ async def collect_stats(session):
     tomorrow_start = today_start + timedelta(days=1)
 
     date_from = today_start.strftime("%Y-%m-%d 00:00:00")
-    date_to = tomorrow_start.strftime("%Y-%m-%d 00:00:00")
-
-    logging.info(f"Сбор данных за день {today_start.strftime('%d.%m')}")
+    date_to   = tomorrow_start.strftime("%Y-%m-%d 00:00:00")
 
     all_deals = await bx_all(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": date_from,
@@ -87,40 +77,67 @@ async def collect_stats(session):
         sources.get("AVITO_COMAGIC", 0) +
         sources.get("UC_Y6UT3Y", 0)
     )
-
     garage_count = sources.get("UC_98W3GU", 0)
+
+    planned = await bx_all(session, "crm.deal.list", {
+        f"filter[>={MEETING_PLANNED_FIELD}]": today_start.strftime("%Y-%m-%dT00:00:00+03:00"),
+        f"filter[<{MEETING_PLANNED_FIELD}]": tomorrow_start.strftime("%Y-%m-%dT00:00:00+03:00"),
+        "select[]": ["ID"],
+    })
+
+    completed = await bx_all(session, "crm.deal.list", {
+        f"filter[>={MEETING_FACT_FIELD}]": today_start.strftime("%Y-%m-%dT00:00:00+03:00"),
+        f"filter[<{MEETING_FACT_FIELD}]": tomorrow_start.strftime("%Y-%m-%dT00:00:00+03:00"),
+        "select[]": ["ID"],
+    })
+
+    logging.info(f"Итог на {now.strftime('%H:%M')}: Авито={avito_count} Гараж={garage_count} Назначено={len(planned)} Состоялось={len(completed)}")
 
     return {
         "avito": avito_count,
         "garage": garage_count,
+        "planned": len(planned),
+        "completed": len(completed),
         "time": now.strftime("%H:%M"),
-        "date": today_start.strftime("%d.%m.%Y"),
+        "date": now.strftime("%d.%m.%Y"),
     }
 
 
 async def send_report(session):
     stats = await collect_stats(session)
-    text = f"""Отчёт Моментум — {stats['date']}
-Накоплено за день (на {stats['time']} МСК)
-────────────────────
-Контакты с Авито: {stats['avito']}
-Лиды с гаража: {stats['garage']}
-────────────────────
-Встречи назначены сегодня: {stats.get('planned', 0)}
-Состоялось встреч: {stats.get('completed', 0)}
-"""
-
+    text = (
+        f"📊 <b>Отчёт Моментум</b> — {stats['date']}\n"
+        f"🕐 Накоплено за день (на {stats['time']} МСК)\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📱 Контакты с Авито: <b>{stats['avito']}</b>\n"
+        f"🚗 Лиды с гаража: <b>{stats['garage']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📅 Встречи назначены сегодня: <b>{stats['planned']}</b>\n"
+        f"✅ Состоялось встреч: <b>{stats['completed']}</b>"
+    )
     await tg_send(session, text)
+    logging.info("Отчёт отправлен")
+
+
+async def wait_until_next_hour():
+    """Ждём до следующего круглого часа МСК"""
+    now = datetime.now(MSK)
+    next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    wait_seconds = (next_hour - now).total_seconds()
+    logging.info(f"Следующий отчёт в {next_hour.strftime('%H:%M')} МСК (через {int(wait_seconds)} сек)")
+    await asyncio.sleep(wait_seconds)
 
 
 async def main():
-    logging.info("Бот запущен v35 — стабильная версия")
+    logging.info("Бот запущен v32 — отчёт каждый час в HH:00 МСК")
 
     async with aiohttp.ClientSession() as session:
+        # Первый отчёт сразу при запуске
         await send_report(session)
 
+        # Дальше — каждый круглый час
         while True:
-            await asyncio.sleep(3600)
+            await wait_until_next_hour()
             await send_report(session)
 
 
