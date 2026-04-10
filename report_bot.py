@@ -82,11 +82,11 @@ async def collect_stats(session):
     avito_count  = sources.get("CALL", 0) + sources.get("AVITO", 0) + sources.get("AVITO_COMAGIC", 0) + sources.get("UC_Y6UT3Y", 0)
     garage_count = sources.get("UC_98W3GU", 0)
 
-    # 1. Встречи назначены НА сегодня (дата встречи = сегодня, считаем до 9:00 МСК)
-    # Берём все сделки где дата встречи = сегодня, независимо от когда назначили
+    # 1. Встречи назначены НА сегодня — дата встречи = сегодня, сделка создана ДО сегодня
     planned_today = await bx_all(session, "crm.deal.list", {
         f"filter[>={MEETING_PLANNED_FIELD}]": msk_from,
         f"filter[<{MEETING_PLANNED_FIELD}]": msk_to,
+        "filter[<DATE_CREATE]": date_from,  # создана до сегодня
         "select[]": ["ID"],
     })
 
@@ -97,11 +97,11 @@ async def collect_stats(session):
         "select[]": ["ID"],
     })
 
-    # 3. Новые встречи назначены за сегодня — сделки СОЗДАНЫ сегодня И дата встречи заполнена
+    # 3. Новые встречи назначены за сегодня — сделки СОЗДАНЫ сегодня И дата встречи >= сегодня
     new_meetings_deals = await bx_all(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": date_from,
         "filter[<DATE_CREATE]": date_to,
-        f"filter[>{MEETING_PLANNED_FIELD}]": "2000-01-01",
+        f"filter[>={MEETING_PLANNED_FIELD}]": msk_from,
         "select[]": ["ID"],
     })
 
@@ -155,7 +155,7 @@ async def wait_until_next_hour():
 
 
 async def main():
-    logging.info("Бот запущен v34 — три строки по встречам")
+    logging.info("Бот запущен v36 — три строки по встречам")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
