@@ -82,11 +82,12 @@ async def collect_stats(session):
     avito_count  = sources.get("CALL", 0) + sources.get("AVITO", 0) + sources.get("AVITO_COMAGIC", 0) + sources.get("UC_Y6UT3Y", 0)
     garage_count = sources.get("UC_98W3GU", 0)
 
-    # 1. Встречи назначены НА сегодня (дата встречи = сегодня, назначены в любое время)
+    # 1. Встречи назначены НА сегодня (дата встречи = сегодня, считаем до 9:00 МСК)
+    # Берём все сделки где дата встречи = сегодня, независимо от когда назначили
     planned_today = await bx_all(session, "crm.deal.list", {
         f"filter[>={MEETING_PLANNED_FIELD}]": msk_from,
         f"filter[<{MEETING_PLANNED_FIELD}]": msk_to,
-        "select[]": ["ID", "DATE_CREATE", MEETING_PLANNED_FIELD],
+        "select[]": ["ID"],
     })
 
     # 2. Состоялось встреч сегодня
@@ -96,27 +97,32 @@ async def collect_stats(session):
         "select[]": ["ID"],
     })
 
-    # 3. Новые встречи назначены именно сегодня
-    # — дата создания сделки сегодня И поле "Дата встречи назначена" заполнено
-    new_meetings = await bx_all(session, "crm.deal.list", {
+    # 3. Новые встречи назначены за сегодня — сделки СОЗДАНЫ сегодня И дата встречи заполнена
+    new_meetings_deals = await bx_all(session, "crm.deal.list", {
         "filter[>=DATE_CREATE]": date_from,
         "filter[<DATE_CREATE]": date_to,
-        f"filter[>{MEETING_PLANNED_FIELD}]": "2000-01-01",  # поле заполнено
-        "select[]": ["ID", MEETING_PLANNED_FIELD],
+        f"filter[>{MEETING_PLANNED_FIELD}]": "2000-01-01",
+        "select[]": ["ID"],
     })
+
+    planned_count  = len(planned_today)
+    new_count      = len(new_meetings_deals)
+    completed_count = len(completed)
+    total_count    = planned_count + new_count
 
     logging.info(
         f"Итог на {now.strftime('%H:%M')}: "
         f"Авито={avito_count} Гараж={garage_count} "
-        f"НаСегодня={len(planned_today)} Состоялось={len(completed)} НовыхНазначено={len(new_meetings)}"
+        f"НаСегодня={planned_count} НовыхНазначено={new_count} Всего={total_count} Состоялось={completed_count}"
     )
 
     return {
         "avito":         avito_count,
         "garage":        garage_count,
-        "planned_today": len(planned_today),
-        "completed":     len(completed),
-        "new_meetings":  len(new_meetings),
+        "planned_today": planned_count,
+        "new_meetings":  new_count,
+        "total_meetings": total_count,
+        "completed":     completed_count,
         "time":          now.strftime("%H:%M"),
         "date":          now.strftime("%d.%m.%Y"),
     }
@@ -133,6 +139,7 @@ async def send_report(session):
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📅 Встречи назначены на сегодня: <b>{stats['planned_today']}</b>\n"
         f"🆕 Новые встречи назначены за сегодня: <b>{stats['new_meetings']}</b>\n"
+        f"📌 Всего встреч: <b>{stats['total_meetings']}</b>\n"
         f"✅ Состоялось встреч: <b>{stats['completed']}</b>"
     )
     await tg_send(session, text)
@@ -148,7 +155,7 @@ async def wait_until_next_hour():
 
 
 async def main():
-    logging.info("Бот запущен v33 — три строки по встречам")
+    logging.info("Бот запущен v34 — три строки по встречам")
     async with aiohttp.ClientSession() as session:
         await send_report(session)
         while True:
